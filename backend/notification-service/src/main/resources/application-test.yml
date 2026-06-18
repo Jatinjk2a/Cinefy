@@ -1,0 +1,22 @@
+spring:
+  data:
+    mongodb:
+      auto-index-creation: true
+  rabbitmq:
+    host: localhost
+    port: 5672
+    username: guest
+    password: guest
+  mail:
+    host: localhost
+    port: 25
+    username: test
+    password: test
+
+rabbitmq:
+  exchange: cineverse.events
+  queues:
+    booking-created: booking.created
+    booking-cancelled: booking.cancelled
+    movie-released: movie.released
+    review-created: review.created

@@ -1,0 +1,178 @@
+# Pull pre-built images from GHCR — no local build needed.
+# Usage:
+#   cp .env.example .env   # fill in JWT_SECRET
+#   docker compose -f docker-compose.ghcr.yml up -d
+
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: cineverse-postgres
+    environment:
+      POSTGRES_USER: cineverse
+      POSTGRES_PASSWORD: cineverse123
+      POSTGRES_DB: cineverse
+    ports: ["5432:5432"]
+    volumes: [postgres_data:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cineverse"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  mongodb:
+    image: mongo:7
+    container_name: cineverse-mongodb
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: cineverse
+      MONGO_INITDB_ROOT_PASSWORD: cineverse123
+      MONGO_INITDB_DATABASE: cineverse
+    ports: ["27017:27017"]
+    volumes: [mongo_data:/data/db]
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: cineverse-redis
+    command: redis-server --requirepass cineverse123
+    ports: ["6379:6379"]
+    volumes: [redis_data:/data]
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "cineverse123", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    container_name: cineverse-rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: cineverse
+      RABBITMQ_DEFAULT_PASS: cineverse123
+    ports: ["5672:5672", "15672:15672"]
+    volumes: [rabbitmq_data:/var/lib/rabbitmq]
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+
+  auth-service:
+    image: ghcr.io/jatinjk2a/cinefy/auth-service:latest
+    container_name: cineverse-auth
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/cineverse
+      SPRING_DATASOURCE_USERNAME: cineverse
+      SPRING_DATASOURCE_PASSWORD: cineverse123
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_EXPIRATION_MS: 86400000
+    ports: ["8081:8081"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  movie-service:
+    image: ghcr.io/jatinjk2a/cinefy/movie-service:latest
+    container_name: cineverse-movie
+    environment:
+      SPRING_DATA_MONGODB_URI: mongodb://cineverse:cineverse123@mongodb:27017/cineverse?authSource=admin
+      SPRING_DATA_REDIS_HOST: redis
+      SPRING_DATA_REDIS_PORT: 6379
+      SPRING_DATA_REDIS_PASSWORD: cineverse123
+      SPRING_RABBITMQ_HOST: rabbitmq
+      SPRING_RABBITMQ_PORT: 5672
+      SPRING_RABBITMQ_USERNAME: cineverse
+      SPRING_RABBITMQ_PASSWORD: cineverse123
+      JWT_SECRET: ${JWT_SECRET}
+    ports: ["8082:8082"]
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    restart: unless-stopped
+
+  booking-service:
+    image: ghcr.io/jatinjk2a/cinefy/booking-service:latest
+    container_name: cineverse-booking
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/cineverse
+      SPRING_DATASOURCE_USERNAME: cineverse
+      SPRING_DATASOURCE_PASSWORD: cineverse123
+      SPRING_DATA_REDIS_HOST: redis
+      SPRING_DATA_REDIS_PORT: 6379
+      SPRING_DATA_REDIS_PASSWORD: cineverse123
+      SPRING_RABBITMQ_HOST: rabbitmq
+      SPRING_RABBITMQ_PORT: 5672
+      SPRING_RABBITMQ_USERNAME: cineverse
+      SPRING_RABBITMQ_PASSWORD: cineverse123
+      JWT_SECRET: ${JWT_SECRET}
+    ports: ["8083:8083"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    restart: unless-stopped
+
+  notification-service:
+    image: ghcr.io/jatinjk2a/cinefy/notification-service:latest
+    container_name: cineverse-notification
+    environment:
+      SPRING_DATA_MONGODB_URI: mongodb://cineverse:cineverse123@mongodb:27017/cineverse?authSource=admin
+      SPRING_RABBITMQ_HOST: rabbitmq
+      SPRING_RABBITMQ_PORT: 5672
+      SPRING_RABBITMQ_USERNAME: cineverse
+      SPRING_RABBITMQ_PASSWORD: cineverse123
+      SPRING_MAIL_HOST: ${MAIL_HOST:-smtp.gmail.com}
+      SPRING_MAIL_PORT: ${MAIL_PORT:-587}
+      SPRING_MAIL_USERNAME: ${MAIL_USERNAME:-}
+      SPRING_MAIL_PASSWORD: ${MAIL_PASSWORD:-}
+    ports: ["8084:8084"]
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    restart: unless-stopped
+
+  gateway-service:
+    image: ghcr.io/jatinjk2a/cinefy/gateway-service:latest
+    container_name: cineverse-gateway
+    environment:
+      AUTH_SERVICE_URL: http://auth-service:8081
+      MOVIE_SERVICE_URL: http://movie-service:8082
+      BOOKING_SERVICE_URL: http://booking-service:8083
+      NOTIFICATION_SERVICE_URL: http://notification-service:8084
+      JWT_SECRET: ${JWT_SECRET}
+    ports: ["8080:8080"]
+    depends_on:
+      - auth-service
+      - movie-service
+      - booking-service
+      - notification-service
+    restart: unless-stopped
+
+  frontend:
+    image: ghcr.io/jatinjk2a/cinefy/frontend:latest
+    container_name: cineverse-frontend
+    ports: ["3000:80"]
+    depends_on:
+      - gateway-service
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  mongo_data:
+  redis_data:
+  rabbitmq_data:

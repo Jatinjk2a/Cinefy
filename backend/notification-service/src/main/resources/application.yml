@@ -1,0 +1,39 @@
+server:
+  port: 8084
+
+spring:
+  application:
+    name: notification-service
+  data:
+    mongodb:
+      uri: ${SPRING_DATA_MONGODB_URI:mongodb://cineverse:cineverse123@localhost:27017/cineverse?authSource=admin}
+  rabbitmq:
+    host: ${SPRING_RABBITMQ_HOST:localhost}
+    port: ${SPRING_RABBITMQ_PORT:5672}
+    username: ${SPRING_RABBITMQ_USERNAME:cineverse}
+    password: ${SPRING_RABBITMQ_PASSWORD:cineverse123}
+  mail:
+    host: ${SPRING_MAIL_HOST:smtp.gmail.com}
+    port: ${SPRING_MAIL_PORT:587}
+    username: ${SPRING_MAIL_USERNAME:}
+    password: ${SPRING_MAIL_PASSWORD:}
+    properties:
+      mail:
+        smtp:
+          auth: true
+          starttls:
+            enable: true
+
+rabbitmq:
+  exchange: cineverse.events
+  queues:
+    booking-created: booking.created
+    booking-cancelled: booking.cancelled
+    movie-released: movie.released
+    review-created: review.created
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info

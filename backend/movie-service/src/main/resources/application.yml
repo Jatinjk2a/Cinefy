@@ -1,0 +1,37 @@
+server:
+  port: 8082
+
+spring:
+  application:
+    name: movie-service
+  data:
+    mongodb:
+      uri: ${SPRING_DATA_MONGODB_URI:mongodb://cineverse:cineverse123@localhost:27017/cineverse?authSource=admin}
+    redis:
+      host: ${SPRING_DATA_REDIS_HOST:localhost}
+      port: ${SPRING_DATA_REDIS_PORT:6379}
+      password: ${SPRING_DATA_REDIS_PASSWORD:cineverse123}
+  cache:
+    type: redis
+    redis:
+      time-to-live: 3600000   # 1 hour
+  rabbitmq:
+    host: ${SPRING_RABBITMQ_HOST:localhost}
+    port: ${SPRING_RABBITMQ_PORT:5672}
+    username: ${SPRING_RABBITMQ_USERNAME:cineverse}
+    password: ${SPRING_RABBITMQ_PASSWORD:cineverse123}
+
+jwt:
+  secret: ${JWT_SECRET:change-this-secret-in-production-at-least-256-bits}
+
+rabbitmq:
+  exchange: cineverse.events
+  queues:
+    movie-released: movie.released
+    review-created: review.created
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info

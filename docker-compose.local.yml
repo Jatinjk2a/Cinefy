@@ -1,0 +1,194 @@
+services:
+
+  # ─── Infrastructure ───────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: cv-postgres
+    environment:
+      POSTGRES_USER: cineverse
+      POSTGRES_PASSWORD: cineverse123
+      POSTGRES_DB: cineverse
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cineverse"]
+      interval: 5s
+      timeout: 3s
+      retries: 15
+    networks:
+      - cineverse-net
+
+  mongodb:
+    image: mongo:7
+    container_name: cv-mongodb
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: cineverse
+      MONGO_INITDB_ROOT_PASSWORD: cineverse123
+      MONGO_INITDB_DATABASE: cineverse
+    ports:
+      - "27018:27017"
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 5s
+      timeout: 3s
+      retries: 15
+    networks:
+      - cineverse-net
+
+  redis:
+    image: redis:7-alpine
+    container_name: cv-redis
+    command: redis-server --requirepass cineverse123
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "cineverse123", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - cineverse-net
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    container_name: cv-rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: cineverse
+      RABBITMQ_DEFAULT_PASS: cineverse123
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+    networks:
+      - cineverse-net
+
+  # ─── Backend Microservices ─────────────────────────────────────
+  cv-auth:
+    build:
+      context: ./backend/auth-service
+      dockerfile: Dockerfile
+    container_name: cv-auth
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://cv-postgres:5432/cineverse
+      SPRING_DATASOURCE_USERNAME: cineverse
+      SPRING_DATASOURCE_PASSWORD: cineverse123
+      JWT_SECRET: ${JWT_SECRET:-rfdggjJgogWewgiaggaAEgbalgnanQgalgalnlnglaglg}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - cineverse-net
+    restart: on-failure
+
+  cv-movie:
+    build:
+      context: ./backend/movie-service
+      dockerfile: Dockerfile
+    container_name: cv-movie
+    environment:
+      SPRING_DATA_MONGODB_URI: mongodb://cineverse:cineverse123@cv-mongodb:27017/cineverse?authSource=admin
+      SPRING_DATA_REDIS_HOST: cv-redis
+      SPRING_DATA_REDIS_PORT: 6379
+      SPRING_DATA_REDIS_PASSWORD: cineverse123
+      SPRING_RABBITMQ_HOST: cv-rabbitmq
+      SPRING_RABBITMQ_USERNAME: cineverse
+      SPRING_RABBITMQ_PASSWORD: cineverse123
+      JWT_SECRET: ${JWT_SECRET:-rfdggjJgogWewgiaggaAEgbalgnanQgalgalnlnglaglg}
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - cineverse-net
+    restart: on-failure
+
+  cv-booking:
+    build:
+      context: ./backend/booking-service
+      dockerfile: Dockerfile
+    container_name: cv-booking
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://cv-postgres:5432/cineverse
+      SPRING_DATASOURCE_USERNAME: cineverse
+      SPRING_DATASOURCE_PASSWORD: cineverse123
+      SPRING_DATA_REDIS_HOST: cv-redis
+      SPRING_DATA_REDIS_PORT: 6379
+      SPRING_DATA_REDIS_PASSWORD: cineverse123
+      SPRING_RABBITMQ_HOST: cv-rabbitmq
+      SPRING_RABBITMQ_USERNAME: cineverse
+      SPRING_RABBITMQ_PASSWORD: cineverse123
+      JWT_SECRET: ${JWT_SECRET:-rfdggjJgogWewgiaggaAEgbalgnanQgalgalnlnglaglg}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - cineverse-net
+    restart: on-failure
+
+  cv-notification:
+    build:
+      context: ./backend/notification-service
+      dockerfile: Dockerfile
+    container_name: cv-notification
+    environment:
+      SPRING_DATA_MONGODB_URI: mongodb://cineverse:cineverse123@cv-mongodb:27017/cineverse?authSource=admin
+      SPRING_RABBITMQ_HOST: cv-rabbitmq
+      SPRING_RABBITMQ_USERNAME: cineverse
+      SPRING_RABBITMQ_PASSWORD: cineverse123
+      SPRING_MAIL_HOST: ${MAIL_HOST:-smtp.gmail.com}
+      SPRING_MAIL_PORT: ${MAIL_PORT:-587}
+      SPRING_MAIL_USERNAME: ${MAIL_USERNAME:-}
+      SPRING_MAIL_PASSWORD: ${MAIL_PASSWORD:-}
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - cineverse-net
+    restart: on-failure
+
+  cv-gateway:
+    build:
+      context: ./backend/gateway-service
+      dockerfile: Dockerfile
+    container_name: cv-gateway
+    ports:
+      - "8080:8080"
+    environment:
+      AUTH_SERVICE_URL: http://cv-auth:8081
+      MOVIE_SERVICE_URL: http://cv-movie:8082
+      BOOKING_SERVICE_URL: http://cv-booking:8083
+      NOTIFICATION_SERVICE_URL: http://cv-notification:8084
+      JWT_SECRET: ${JWT_SECRET:-rfdggjJgogWewgiaggaAEgbalgnanQgalgalnlnglaglg}
+    depends_on:
+      - cv-auth
+      - cv-movie
+      - cv-booking
+      - cv-notification
+    networks:
+      - cineverse-net
+    restart: on-failure
+
+volumes:
+  postgres_data:
+  mongo_data:
+
+networks:
+  cineverse-net:
+    driver: bridge

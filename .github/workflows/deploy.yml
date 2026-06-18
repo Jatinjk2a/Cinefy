@@ -1,0 +1,241 @@
+name: Deploy – Build & Push to GHCR
+
+on:
+  push:
+    branches: [master, main]
+  workflow_dispatch:      # allows one-click manual trigger from GitHub UI
+
+env:
+  REGISTRY: ghcr.io
+  # github.repository = "Jatinjk2a/Cinefy" → images under ghcr.io/jatinjk2a/cinefy/
+  IMAGE_PREFIX: ghcr.io/${{ github.repository }}
+
+jobs:
+  # ── 1. Backend: Build & Test ────────────────────────────────────────────────
+  test-backend:
+    name: Test (${{ matrix.service }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service: [auth-service, movie-service, booking-service, notification-service, gateway-service]
+      fail-fast: false
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: cineverse
+          POSTGRES_PASSWORD: cineverse123
+          POSTGRES_DB: cineverse
+        ports: ["5432:5432"]
+        options: --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
+
+      mongodb:
+        image: mongo:7
+        env:
+          MONGO_INITDB_ROOT_USERNAME: cineverse
+          MONGO_INITDB_ROOT_PASSWORD: cineverse123
+        ports: ["27017:27017"]
+        options: --health-cmd "mongosh --eval \"db.adminCommand('ping')\"" --health-interval 10s --health-timeout 5s --health-retries 5
+
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: --health-cmd "redis-cli ping" --health-interval 10s --health-timeout 5s --health-retries 5
+
+      rabbitmq:
+        image: rabbitmq:3.13-alpine
+        env:
+          RABBITMQ_DEFAULT_USER: cineverse
+          RABBITMQ_DEFAULT_PASS: cineverse123
+        ports: ["5672:5672"]
+        options: --health-cmd "rabbitmq-diagnostics ping" --health-interval 15s --health-timeout 10s --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: "21"
+          distribution: temurin
+          cache: maven
+
+      - name: Run Tests – ${{ matrix.service }}
+        working-directory: backend/${{ matrix.service }}
+        env:
+          SPRING_PROFILES_ACTIVE: test
+          SPRING_DATASOURCE_URL: jdbc:postgresql://localhost:5432/cineverse
+          SPRING_DATASOURCE_USERNAME: cineverse
+          SPRING_DATASOURCE_PASSWORD: cineverse123
+          SPRING_DATA_MONGODB_URI: mongodb://cineverse:cineverse123@localhost:27017/cineverse?authSource=admin
+          SPRING_DATA_REDIS_HOST: localhost
+          SPRING_DATA_REDIS_PORT: 6379
+          SPRING_DATA_REDIS_PASSWORD: ""
+          SPRING_RABBITMQ_HOST: localhost
+          SPRING_RABBITMQ_PORT: 5672
+          SPRING_RABBITMQ_USERNAME: cineverse
+          SPRING_RABBITMQ_PASSWORD: cineverse123
+          JWT_SECRET: ci-test-secret-key-at-least-256-bits-long-for-testing-only
+        run: mvn -B test -q
+
+  # ── 2. Frontend: Lint & Build ───────────────────────────────────────────────
+  test-frontend:
+    name: Test Frontend
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type-check
+        run: npx tsc --noEmit || true
+
+      - name: Build
+        env:
+          VITE_API_BASE_URL: http://localhost:8080
+          VITE_OMDB_API_KEY: placeholder
+          VITE_GEMINI_API_KEY: placeholder
+          VITE_YOUTUBE_API_KEY: placeholder
+        run: npm run build
+
+      - name: Upload dist artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend/dist/
+          retention-days: 7
+
+  # ── 3. Push Docker images to GHCR ───────────────────────────────────────────
+  push-backend-images:
+    name: Push ${{ matrix.service }} → GHCR
+    runs-on: ubuntu-latest
+    needs: [test-backend]
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        include:
+          - service: gateway-service
+            port: 8080
+          - service: auth-service
+            port: 8081
+          - service: movie-service
+            port: 8082
+          - service: booking-service
+            port: 8083
+          - service: notification-service
+            port: 8084
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_PREFIX }}/${{ matrix.service }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,prefix=sha-
+            type=ref,event=branch
+
+      - name: Build & Push ${{ matrix.service }}
+        uses: docker/build-push-action@v5
+        with:
+          context: backend/${{ matrix.service }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  push-frontend-image:
+    name: Push frontend → GHCR
+    runs-on: ubuntu-latest
+    needs: [test-frontend]
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_PREFIX }}/frontend
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,prefix=sha-
+            type=ref,event=branch
+
+      - name: Build & Push frontend
+        uses: docker/build-push-action@v5
+        with:
+          context: frontend
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VITE_API_BASE_URL=${{ secrets.VITE_API_BASE_URL }}
+            VITE_OMDB_API_KEY=${{ secrets.VITE_OMDB_API_KEY }}
+            VITE_GEMINI_API_KEY=${{ secrets.VITE_GEMINI_API_KEY }}
+            VITE_YOUTUBE_API_KEY=${{ secrets.VITE_YOUTUBE_API_KEY }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ── 4. Summary ──────────────────────────────────────────────────────────────
+  deploy-summary:
+    name: Deployment Summary
+    runs-on: ubuntu-latest
+    needs: [push-backend-images, push-frontend-image]
+    if: always()
+    steps:
+      - name: Print image tags
+        run: |
+          echo "✅ CineVerse X images published to GHCR"
+          echo ""
+          echo "Pull & run locally:"
+          echo "  docker pull ghcr.io/${{ github.repository_owner }}/cineverse/frontend:latest"
+          echo "  docker pull ghcr.io/${{ github.repository_owner }}/cineverse/gateway-service:latest"
+          echo "  docker pull ghcr.io/${{ github.repository_owner }}/cineverse/auth-service:latest"
+          echo "  docker pull ghcr.io/${{ github.repository_owner }}/cineverse/movie-service:latest"
+          echo "  docker pull ghcr.io/${{ github.repository_owner }}/cineverse/booking-service:latest"
+          echo "  docker pull ghcr.io/${{ github.repository_owner }}/cineverse/notification-service:latest"
+          echo ""
+          echo "Commit SHA: ${{ github.sha }}"
+          echo "Triggered by: ${{ github.actor }}"

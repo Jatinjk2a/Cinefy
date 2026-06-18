@@ -1,0 +1,25 @@
+spring:
+  data:
+    mongodb:
+      # flapdoodle embedded mongo takes over automatically
+      auto-index-creation: true
+    redis:
+      host: localhost
+      port: 6379
+      password: ""
+  cache:
+    type: none   # disable Redis cache in tests
+  rabbitmq:
+    host: localhost
+    port: 5672
+    username: guest
+    password: guest
+
+jwt:
+  secret: test-jwt-secret-key-for-tests-only
+
+rabbitmq:
+  exchange: cineverse.events
+  queues:
+    movie-released: movie.released
+    review-created: review.created

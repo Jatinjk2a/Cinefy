@@ -1,0 +1,65 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: cv-postgres
+    environment:
+      POSTGRES_USER: cineverse
+      POSTGRES_PASSWORD: cineverse123
+      POSTGRES_DB: cineverse
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cineverse"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  mongodb:
+    image: mongo:7
+    container_name: cv-mongodb
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: cineverse
+      MONGO_INITDB_ROOT_PASSWORD: cineverse123
+      MONGO_INITDB_DATABASE: cineverse
+    ports:
+      - "27018:27017"
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: cv-redis
+    command: redis-server --requirepass cineverse123
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "cineverse123", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    container_name: cv-rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: cineverse
+      RABBITMQ_DEFAULT_PASS: cineverse123
+    ports:
+      - "5672:5672"
+      - "15673:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  postgres_data:
+  mongo_data:
